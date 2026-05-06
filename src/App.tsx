@@ -1,5 +1,5 @@
 import "./styles.css";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { generateBezierCurve } from "./curve";
 
@@ -11,6 +11,9 @@ interface ControlPoint {
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const finishButtonRef = useRef<HTMLButtonElement | null>(null);
+  const segmentsRef = useRef(64);
+  const redrawRef = useRef<(() => void) | null>(null);
+  const [segments, setSegments] = useState(64);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -33,13 +36,18 @@ export default function App() {
     const lineObjects: THREE.Line[] = [];
     const pointObjects: THREE.Mesh[] = [];
     let controlPoints: ControlPoint[] = [];
+    let currentCurveStart: THREE.Vector3 | null = null;
     const closedCurves: ControlPoint[][] = []; // 完成した曲線群
     const closedCurveMeta: { points: number; lines: number }[] = []; // 完成曲線ごとのオブジェクト数
 
     // undo/redo 用の履歴 (スナップショット)
     type Snapshot = {
       controlPoints: { x: number; y: number; type: "red" | "blue" }[];
-      closedCurves: { points: { x: number; y: number; type: "red" | "blue" }[]; closed: boolean }[];
+      currentCurveStart: { x: number; y: number } | null;
+      closedCurves: {
+        points: { x: number; y: number; type: "red" | "blue" }[];
+        closed: boolean;
+      }[];
     };
 
     const history: Snapshot[] = [];
@@ -47,6 +55,9 @@ export default function App() {
 
     const createSnapshot = (): Snapshot => ({
       controlPoints: controlPoints.map((p) => ({ x: p.position.x, y: p.position.y, type: p.type })),
+      currentCurveStart: currentCurveStart
+        ? { x: currentCurveStart.x, y: currentCurveStart.y }
+        : null,
       closedCurves: closedCurves.map((curve, i) => ({
         points: curve.map((p) => ({ x: p.position.x, y: p.position.y, type: p.type })),
         closed: closedCurveMeta[i] ? closedCurveMeta[i].lines >= closedCurveMeta[i].points : false,
@@ -74,6 +85,9 @@ export default function App() {
 
       // reset state arrays
       controlPoints = [];
+      currentCurveStart = snap.currentCurveStart
+        ? new THREE.Vector3(snap.currentCurveStart.x, snap.currentCurveStart.y)
+        : null;
       closedCurves.length = 0;
       closedCurveMeta.length = 0;
 
@@ -83,16 +97,8 @@ export default function App() {
         for (const pt of c.points) {
           const v = new THREE.Vector3(pt.x, pt.y);
           pts.push({ position: v, type: pt.type });
-          addPoint(v, pt.type === "red" ? new THREE.Color(0xff0000) : new THREE.Color(0x0000ff));
         }
-        // draw lines between consecutive points
-        for (let i = 1; i < pts.length; i++) {
-          addLine([pts[i - 1].position, pts[i].position], 0x8f96a3);
-        }
-        // if closed, add closing line
-        if (c.closed && pts.length > 1) {
-          addLine([pts[pts.length - 1].position, pts[0].position], 0x8f96a3);
-        }
+        addBezierFromControlPoints(pts, 0x8f96a3);
         closedCurves.push(pts);
         const lines = c.closed ? pts.length : Math.max(0, pts.length - 1);
         closedCurveMeta.push({ points: pts.length, lines });
@@ -104,9 +110,7 @@ export default function App() {
         controlPoints.push({ position: v, type: pt.type });
         addPoint(v, pt.type === "red" ? new THREE.Color(0xff0000) : new THREE.Color(0x0000ff));
       }
-      for (let i = 1; i < controlPoints.length; i++) {
-        addLine([controlPoints[i - 1].position, controlPoints[i].position], 0x8f96a3);
-      }
+      addBezierFromControlPoints(controlPoints, 0x8f96a3);
     };
 
     const pushHistory = () => {
@@ -131,12 +135,36 @@ export default function App() {
       restoreSnapshot(snap);
     };
 
+    redrawRef.current = () => {
+      restoreSnapshot(createSnapshot());
+    };
+
     const addLine = (points: THREE.Vector3[], color: number) => {
       const geometry = new THREE.BufferGeometry().setFromPoints(points);
       const material = new THREE.LineBasicMaterial({ color });
       const line = new THREE.Line(geometry, material);
       scene.add(line);
       lineObjects.push(line);
+    };
+
+    const addBezierFromControlPoints = (
+      points: ControlPoint[],
+      color: number,
+      segments: number = segmentsRef.current
+    ) => {
+      if (points.length < 3) {
+        return;
+      }
+
+      for (let i = 0; i + 2 < points.length; i += 2) {
+        const curvePoints = generateBezierCurve(
+          points[i].position,
+          points[i + 1].position,
+          points[i + 2].position,
+          segments
+        );
+        addLine(curvePoints, color);
+      }
     };
 
     const addPoint = (position: THREE.Vector3, color: THREE.Color) => {
@@ -146,6 +174,26 @@ export default function App() {
       sphere.position.copy(position);
       scene.add(sphere);
       pointObjects.push(sphere);
+    };
+
+    const removeLastPointObject = () => {
+      const p = pointObjects.pop();
+      if (!p) {
+        return;
+      }
+      (p.geometry as THREE.BufferGeometry).dispose();
+      (p.material as THREE.Material).dispose();
+      scene.remove(p);
+    };
+
+    const removeFirstPointObject = () => {
+      const p = pointObjects.shift();
+      if (!p) {
+        return;
+      }
+      (p.geometry as THREE.BufferGeometry).dispose();
+      (p.material as THREE.Material).dispose();
+      scene.remove(p);
     };
 
     // スクリーン座標をワールド座標に変換
@@ -171,11 +219,8 @@ export default function App() {
 
       // 最後の点が青点なら撤回する（ただし閉曲線の場合は除外）
       if (!isClosed && controlPoints.length > 1 && controlPoints[controlPoints.length - 1].type === "blue") {
-        const lastPoint = controlPoints.pop();
-        pointObjects.pop();
-        (scene.children[scene.children.length - 1] as THREE.Object3D).parent && scene.remove(scene.children[scene.children.length - 1]);
-        lineObjects.pop();
-        (scene.children[scene.children.length - 1] as THREE.Object3D).parent && scene.remove(scene.children[scene.children.length - 1]);
+        controlPoints.pop();
+        removeLastPointObject();
       }
 
       // 保存するオブジェクト数を記録
@@ -187,7 +232,13 @@ export default function App() {
         closedCurveMeta.push({ points: pointsCount, lines: linesCount });
       }
 
+      // 確定した時点で制御点表示は消す
+      for (let i = 0; i < pointsCount; i++) {
+        removeLastPointObject();
+      }
+
       controlPoints = [];
+      currentCurveStart = null;
       pushHistory();
     };
 
@@ -196,6 +247,30 @@ export default function App() {
       // 赤、青、赤、青...の交互パターン
       const type = controlPoints.length % 2 === 0 ? "red" : "blue";
 
+      if (type === "red" && currentCurveStart === null) {
+        currentCurveStart = position.clone();
+      }
+
+      // 始点近傍なら閉曲線として確定（始点表示は消えていても始点座標は保持）
+      if (type === "red" && currentCurveStart && controlPoints.length >= 2) {
+        const distToStart = position.distanceTo(currentCurveStart);
+        if (distToStart < 10) {
+          const closingRed: ControlPoint = {
+            position: currentCurveStart.clone(),
+            type: "red",
+          };
+
+          const p0 = controlPoints[controlPoints.length - 2].position;
+          const p1 = controlPoints[controlPoints.length - 1].position;
+          const p2 = closingRed.position;
+          addLine(generateBezierCurve(p0, p1, p2, segmentsRef.current), 0x8f96a3);
+
+          controlPoints.push(closingRed);
+          finishCurve(true);
+          return;
+        }
+      }
+
       // 赤点を追加する場合、既存の赤点との距離を確認
       if (type === "red" && controlPoints.length > 0) {
         for (const point of controlPoints) {
@@ -203,11 +278,20 @@ export default function App() {
             const dist = position.distanceTo(point.position);
             if (dist < 10) {
               // 閉曲線判定：距離が近い場合
-              // 最後の点（青点）と既存の赤点を結ぶ線を描画
-              if (controlPoints.length > 1) {
-                const lastPoint = controlPoints[controlPoints.length - 1];
-                addLine([lastPoint.position, point.position], 0x8f96a3);
+              const closingRed: ControlPoint = {
+                position: point.position.clone(),
+                type: "red",
+              };
+
+              // 最後のベジェ区間 (..., 赤, 青, 既存赤) を描画
+              if (controlPoints.length >= 2) {
+                const p0 = controlPoints[controlPoints.length - 2].position;
+                const p1 = controlPoints[controlPoints.length - 1].position;
+                const p2 = closingRed.position;
+                addLine(generateBezierCurve(p0, p1, p2, segmentsRef.current), 0x8f96a3);
               }
+
+              controlPoints.push(closingRed);
               finishCurve(true);
               return;
             }
@@ -218,11 +302,22 @@ export default function App() {
       controlPoints.push({ position, type });
       addPoint(position, type === "red" ? new THREE.Color(0xff0000) : new THREE.Color(0x0000ff));
 
-      // 前のポイントがあれば接続線を描画
-      if (controlPoints.length > 1) {
-        const prevPoint = controlPoints[controlPoints.length - 2];
-        const currentPoint = controlPoints[controlPoints.length - 1];
-        addLine([prevPoint.position, currentPoint.position], 0x8f96a3);
+      // 赤-青-赤 がそろったタイミングで二次ベジェを1本描画
+      if (controlPoints.length >= 3 && controlPoints.length % 2 === 1) {
+        const seg = controlPoints.slice(controlPoints.length - 3);
+        const p0 = seg[0].position;
+        const p1 = seg[1].position;
+        const p2 = seg[2].position;
+        addLine(generateBezierCurve(p0, p1, p2, segmentsRef.current), 0x8f96a3);
+
+        // この区間は確定済みとして保存し、履歴復元できるようにする
+        closedCurves.push(seg.map((p) => ({ position: p.position.clone(), type: p.type })));
+        closedCurveMeta.push({ points: 3, lines: 1 });
+
+        // 確定した制御点は消す（次区間に必要な末尾の赤点だけ残す）
+        controlPoints.splice(0, 2);
+        removeFirstPointObject();
+        removeFirstPointObject();
       }
 
       pushHistory();
@@ -332,6 +427,7 @@ export default function App() {
       }
       // reset state
       controlPoints = [];
+      currentCurveStart = null;
       closedCurves.length = 0;
       closedCurveMeta.length = 0;
       pushHistory();
@@ -431,6 +527,7 @@ export default function App() {
     render();
 
     return () => {
+      redrawRef.current = null;
       window.cancelAnimationFrame(animationFrameId);
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener("mousedown", handleCanvasMouseDown);
@@ -468,6 +565,24 @@ export default function App() {
       <div className="viewer" ref={containerRef} />
       <div className="hud">
         <div>Bezier 2D Viewer (three.js)</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label htmlFor="segments-slider">segments</label>
+          <input
+            id="segments-slider"
+            type="range"
+            min={8}
+            max={256}
+            step={1}
+            value={segments}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              setSegments(next);
+              segmentsRef.current = next;
+              redrawRef.current?.();
+            }}
+          />
+          <span>{segments}</span>
+        </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button ref={finishButtonRef} className="finish-button">
             Finish Curve
