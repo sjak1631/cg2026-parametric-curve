@@ -38,17 +38,17 @@ export default function App() {
 
     // undo/redo 用の履歴 (スナップショット)
     type Snapshot = {
-      controlPoints: { x: number; y: number; z: number; type: "red" | "blue" }[];
-      closedCurves: { points: { x: number; y: number; z: number; type: "red" | "blue" }[]; closed: boolean }[];
+      controlPoints: { x: number; y: number; type: "red" | "blue" }[];
+      closedCurves: { points: { x: number; y: number; type: "red" | "blue" }[]; closed: boolean }[];
     };
 
     const history: Snapshot[] = [];
     let historyIndex = -1;
 
     const createSnapshot = (): Snapshot => ({
-      controlPoints: controlPoints.map((p) => ({ x: p.position.x, y: p.position.y, z: p.position.z, type: p.type })),
+      controlPoints: controlPoints.map((p) => ({ x: p.position.x, y: p.position.y, type: p.type })),
       closedCurves: closedCurves.map((curve, i) => ({
-        points: curve.map((p) => ({ x: p.position.x, y: p.position.y, z: p.position.z, type: p.type })),
+        points: curve.map((p) => ({ x: p.position.x, y: p.position.y, type: p.type })),
         closed: closedCurveMeta[i] ? closedCurveMeta[i].lines >= closedCurveMeta[i].points : false,
       })),
     });
@@ -81,7 +81,7 @@ export default function App() {
       for (const c of snap.closedCurves) {
         const pts: ControlPoint[] = [];
         for (const pt of c.points) {
-          const v = new THREE.Vector3(pt.x, pt.y, pt.z);
+          const v = new THREE.Vector3(pt.x, pt.y);
           pts.push({ position: v, type: pt.type });
           addPoint(v, pt.type === "red" ? new THREE.Color(0xff0000) : new THREE.Color(0x0000ff));
         }
@@ -100,7 +100,7 @@ export default function App() {
 
       // restore current control points
       for (const pt of snap.controlPoints) {
-        const v = new THREE.Vector3(pt.x, pt.y, pt.z);
+        const v = new THREE.Vector3(pt.x, pt.y);
         controlPoints.push({ position: v, type: pt.type });
         addPoint(v, pt.type === "red" ? new THREE.Color(0xff0000) : new THREE.Color(0x0000ff));
       }

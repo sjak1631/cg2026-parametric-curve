@@ -12,8 +12,7 @@ export function generateBezierCurve(
         const inv_t = 1 - t;
         points.push(new THREE.Vector3(
             inv_t * p0.x + t * p2.x,
-            inv_t * p0.y + t * p2.y,
-            inv_t * p0.z + t * p2.z
+            inv_t * p0.y + t * p2.y
         ));
     }
     return points;
