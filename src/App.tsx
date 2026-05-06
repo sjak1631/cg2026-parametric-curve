@@ -1,7 +1,7 @@
 import "./styles.css";
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { generateBezierCurveCasteljau, generateBezierCurvePolynomial } from "./curve";
+import { generateBezierCurveCasteljau, generateBezierCurvePolynomial, generateBezierCurvePolynomialN, generateBezierCurveCasteljauN } from "./curve";
 
 interface ControlPoint {
   position: THREE.Vector3;
@@ -16,8 +16,11 @@ export default function App() {
   const segmentsRef = useRef(64);
   const redrawRef = useRef<(() => void) | null>(null);
   const curveMethodRef = useRef<CurveMethod>("polynomial");
+  const degreeRef = useRef<number>(2);
   const [segments, setSegments] = useState(64);
   const [curveMethod, setCurveMethod] = useState<CurveMethod>("polynomial");
+  const [degree, setDegree] = useState<number>(2);
+  const degreeChangeHandlerRef = useRef<((next: number) => void) | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -43,6 +46,7 @@ export default function App() {
     let currentCurveStart: THREE.Vector3 | null = null;
     const closedCurves: ControlPoint[][] = []; // 完成した曲線群
     const closedCurveMeta: { points: number; lines: number }[] = []; // 完成曲線ごとのオブジェクト数
+    const closedCurveRendered: { points: { x: number; y: number }[]; color: number }[] = [];
 
     // undo/redo 用の履歴 (スナップショット)
     type Snapshot = {
@@ -52,6 +56,7 @@ export default function App() {
         points: { x: number; y: number; type: "red" | "blue" }[];
         closed: boolean;
       }[];
+      closedRendered: { points: { x: number; y: number }[]; color: number }[];
     };
 
     const history: Snapshot[] = [];
@@ -66,6 +71,7 @@ export default function App() {
         points: curve.map((p) => ({ x: p.position.x, y: p.position.y, type: p.type })),
         closed: closedCurveMeta[i] ? closedCurveMeta[i].lines >= closedCurveMeta[i].points : false,
       })),
+      closedRendered: closedCurveRendered.map((r) => ({ points: r.points.map((pt) => ({ x: pt.x, y: pt.y })), color: r.color })),
     });
 
     const clearSceneObjects = () => {
@@ -95,17 +101,24 @@ export default function App() {
       closedCurves.length = 0;
       closedCurveMeta.length = 0;
 
-      // restore closed curves
+      // restore closed curves data (control points only)
       for (const c of snap.closedCurves) {
         const pts: ControlPoint[] = [];
         for (const pt of c.points) {
           const v = new THREE.Vector3(pt.x, pt.y);
           pts.push({ position: v, type: pt.type });
         }
-        addBezierFromControlPoints(pts, 0x8f96a3);
         closedCurves.push(pts);
         const lines = c.closed ? pts.length : Math.max(0, pts.length - 1);
         closedCurveMeta.push({ points: pts.length, lines });
+      }
+
+      // restore rendered curve geometries (サンプル済みの座標で復元する)
+      closedCurveRendered.length = 0;
+      for (const r of snap.closedRendered) {
+        const pts = r.points.map((p) => new THREE.Vector3(p.x, p.y));
+        addLine(pts, r.color);
+        closedCurveRendered.push({ points: r.points.map((p) => ({ x: p.x, y: p.y })), color: r.color });
       }
 
       // restore current control points
@@ -143,6 +156,38 @@ export default function App() {
       restoreSnapshot(createSnapshot());
     };
 
+    // 次数変更時のハンドラを登録（マウント内で controlPoints 等へアクセス可能）
+    degreeChangeHandlerRef.current = (next: number) => {
+      const old = degreeRef.current;
+      // 次数を下げる場合、in-progress の青点が存在すれば青点のみ撤回して赤点は保持する
+      if (next < old) {
+        const hasBlue = controlPoints.some((p) => p.type === "blue");
+        if (hasBlue) {
+          // 全ての点表示を一旦消し、赤点のみ再描画して controlPoints を更新する
+          while (pointObjects.length) {
+            removeLastPointObject();
+          }
+
+          const redOnly: ControlPoint[] = controlPoints.filter((p) => p.type === "red");
+          controlPoints = redOnly.map((p) => ({ position: p.position.clone(), type: "red" }));
+
+          // 再描画: 赤点だけを復元
+          for (const rp of controlPoints) {
+            addPoint(rp.position, new THREE.Color(0xff0000));
+          }
+
+          // 現在の始点は赤点の先頭を使う（なければ null）
+          currentCurveStart = controlPoints.length > 0 ? controlPoints[0].position.clone() : null;
+
+          pushHistory();
+        }
+      }
+
+      degreeRef.current = next;
+      setDegree(next);
+      redrawRef.current?.();
+    };
+
     const addLine = (points: THREE.Vector3[], color: number) => {
       const geometry = new THREE.BufferGeometry().setFromPoints(points);
       const material = new THREE.LineBasicMaterial({ color });
@@ -151,12 +196,12 @@ export default function App() {
       lineObjects.push(line);
     };
 
-    const buildCurvePoints = (p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, segments: number) => {
+    const buildCurvePoints = (pointsVec: THREE.Vector3[], segments: number, degree: number) => {
       if (curveMethodRef.current === "casteljau") {
-        return generateBezierCurveCasteljau(p0, p1, p2, segments);
+        return generateBezierCurveCasteljauN(pointsVec, segments);
       }
 
-      return generateBezierCurvePolynomial(p0, p1, p2, segments);
+      return generateBezierCurvePolynomialN(pointsVec, segments);
     };
 
     const addBezierFromControlPoints = (
@@ -164,18 +209,18 @@ export default function App() {
       color: number,
       segments: number = segmentsRef.current
     ) => {
-      if (points.length < 3) {
+      const deg = degreeRef.current;
+      const windowSize = Math.max(2, deg + 1);
+      if (points.length < windowSize) {
         return;
       }
 
-      for (let i = 0; i + 2 < points.length; i += 2) {
-        const curvePoints = buildCurvePoints(
-          points[i].position,
-          points[i + 1].position,
-          points[i + 2].position,
-          segments
-        );
-        addLine(curvePoints, color);
+      for (let i = 0; i + windowSize - 1 < points.length; i += 2) {
+        const ctrl = points.slice(i, i + windowSize).map((p) => p.position);
+        if (ctrl.length === windowSize) {
+          const curvePoints = buildCurvePoints(ctrl, segments, deg);
+          addLine(curvePoints, color);
+        }
       }
     };
 
@@ -256,15 +301,19 @@ export default function App() {
 
     // Control point を追加
     const addControlPoint = (position: THREE.Vector3) => {
-      // 赤、青、赤、青...の交互パターン
-      const type = controlPoints.length % 2 === 0 ? "red" : "blue";
+      const deg = Math.max(1, degreeRef.current);
+      const stride = deg; // 次数 n のとき区間のシフト幅
+      const windowSize = deg + 1; // 必要な制御点数
+
+      // 色付け: ウィンドウの先頭・末尾を赤、それ以外を青にする（先頭は index % stride == 0）
+      const type = controlPoints.length % stride === 0 ? "red" : "blue";
 
       if (type === "red" && currentCurveStart === null) {
         currentCurveStart = position.clone();
       }
 
       // 始点近傍なら閉曲線として確定（始点表示は消えていても始点座標は保持）
-      if (type === "red" && currentCurveStart && controlPoints.length >= 2) {
+      if (type === "red" && currentCurveStart && controlPoints.length >= deg) {
         const distToStart = position.distanceTo(currentCurveStart);
         if (distToStart < 10) {
           const closingRed: ControlPoint = {
@@ -272,10 +321,12 @@ export default function App() {
             type: "red",
           };
 
-          const p0 = controlPoints[controlPoints.length - 2].position;
-          const p1 = controlPoints[controlPoints.length - 1].position;
-          const p2 = closingRed.position;
-          addLine(buildCurvePoints(p0, p1, p2, segmentsRef.current), 0x8f96a3);
+          // 最後の degree 個の制御点を取得して closing を付けて描画
+          const lastPts = controlPoints.slice(Math.max(0, controlPoints.length - deg)).map(p => p.position);
+          const ctrl = [...lastPts, closingRed.position];
+          const curvePts = buildCurvePoints(ctrl, segmentsRef.current, degreeRef.current);
+          addLine(curvePts, 0x8f96a3);
+          closedCurveRendered.push({ points: curvePts.map((p) => ({ x: p.x, y: p.y })), color: 0x8f96a3 });
 
           controlPoints.push(closingRed);
           finishCurve(true);
@@ -295,12 +346,13 @@ export default function App() {
                 type: "red",
               };
 
-              // 最後のベジェ区間 (..., 赤, 青, 既存赤) を描画
-              if (controlPoints.length >= 2) {
-                const p0 = controlPoints[controlPoints.length - 2].position;
-                const p1 = controlPoints[controlPoints.length - 1].position;
-                const p2 = closingRed.position;
-                addLine(buildCurvePoints(p0, p1, p2, segmentsRef.current), 0x8f96a3);
+              // 最後の degree 個の制御点を取得して closing を付けて描画
+              if (controlPoints.length >= deg) {
+                const lastPts = controlPoints.slice(Math.max(0, controlPoints.length - deg)).map(p => p.position);
+                const ctrl = [...lastPts, closingRed.position];
+                const curvePts = buildCurvePoints(ctrl, segmentsRef.current, degreeRef.current);
+                addLine(curvePts, 0x8f96a3);
+                closedCurveRendered.push({ points: curvePts.map((p) => ({ x: p.x, y: p.y })), color: 0x8f96a3 });
               }
 
               controlPoints.push(closingRed);
@@ -314,22 +366,23 @@ export default function App() {
       controlPoints.push({ position, type });
       addPoint(position, type === "red" ? new THREE.Color(0xff0000) : new THREE.Color(0x0000ff));
 
-      // 赤-青-赤 がそろったタイミングで二次ベジェを1本描画
-      if (controlPoints.length >= 3 && controlPoints.length % 2 === 1) {
-        const seg = controlPoints.slice(controlPoints.length - 3);
-        const p0 = seg[0].position;
-        const p1 = seg[1].position;
-        const p2 = seg[2].position;
-        addLine(buildCurvePoints(p0, p1, p2, segmentsRef.current), 0x8f96a3);
+      // ウィンドウが埋まったら（degree+1 個揃ったら）描画し、先頭 stride 個を削除して次区間に進む
+      if (controlPoints.length >= windowSize) {
+        const seg = controlPoints.slice(controlPoints.length - windowSize);
+        const ctrl = seg.map((p) => p.position);
+        const curvePts = buildCurvePoints(ctrl, segmentsRef.current, degreeRef.current);
+        addLine(curvePts, 0x8f96a3);
+        closedCurveRendered.push({ points: curvePts.map((p) => ({ x: p.x, y: p.y })), color: 0x8f96a3 });
 
-        // この区間は確定済みとして保存し、履歴復元できるようにする
+        // この区間は確定済みとして保存
         closedCurves.push(seg.map((p) => ({ position: p.position.clone(), type: p.type })));
-        closedCurveMeta.push({ points: 3, lines: 1 });
+        closedCurveMeta.push({ points: windowSize, lines: 1 });
 
-        // 確定した制御点は消す（次区間に必要な末尾の赤点だけ残す）
-        controlPoints.splice(0, 2);
-        removeFirstPointObject();
-        removeFirstPointObject();
+        // 確定した制御点は先頭 stride 個を消す（末尾の赤点は残る）
+        controlPoints.splice(0, stride);
+        for (let i = 0; i < stride; i++) {
+          removeFirstPointObject();
+        }
       }
 
       pushHistory();
@@ -610,6 +663,38 @@ export default function App() {
             <option value="polynomial">polynomial</option>
             <option value="casteljau">de Casteljau</option>
           </select>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label>degree</label>
+          <button
+            onClick={() => {
+              const next = Math.max(1, degree - 1);
+              if (degreeChangeHandlerRef.current) {
+                degreeChangeHandlerRef.current(next);
+              } else {
+                setDegree(next);
+                degreeRef.current = next;
+                redrawRef.current?.();
+              }
+            }}
+          >
+            -
+          </button>
+          <div style={{ width: 28, textAlign: "center" }}>{degree}</div>
+          <button
+            onClick={() => {
+              const next = Math.min(10, degree + 1);
+              if (degreeChangeHandlerRef.current) {
+                degreeChangeHandlerRef.current(next);
+              } else {
+                setDegree(next);
+                degreeRef.current = next;
+                redrawRef.current?.();
+              }
+            }}
+          >
+            +
+          </button>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button ref={finishButtonRef} className="finish-button">

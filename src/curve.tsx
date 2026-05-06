@@ -48,4 +48,46 @@ export function generateBezierCurveCasteljau(
     return points;
 }
 
+// --- n次 (degree-N) ひな型関数 ---
+// 実際の実装はユーザー側で行う想定のため、ここでは型と簡単なフェイルセーフ実装のみ用意します。
+export function generateBezierCurvePolynomialN(
+    controlPoints: THREE.Vector3[],
+    segments: number = 50
+): THREE.Vector3[] {
+    const points: THREE.Vector3[] = [];
+    // フェイルセーフ: 制御点が2点以上あれば直線で補間して返す（実装を差し替えてください）
+    if (controlPoints.length >= 2) {
+        const p0 = controlPoints[0];
+        const pN = controlPoints[controlPoints.length - 1];
+        for (let i = 0; i <= segments; i++) {
+            const t = i / segments;
+            points.push(new THREE.Vector3(
+                p0.x * (1 - t) + pN.x * t,
+                p0.y * (1 - t) + pN.y * t
+            ));
+        }
+    }
+    return points;
+}
+
+export function generateBezierCurveCasteljauN(
+    controlPoints: THREE.Vector3[],
+    segments: number = 50
+): THREE.Vector3[] {
+    const points: THREE.Vector3[] = [];
+    // フェイルセーフ: ここもユーザー実装用のスタブです。現状は先頭と末尾の直線補間を返します。
+    if (controlPoints.length >= 2) {
+        const p0 = controlPoints[0];
+        const pN = controlPoints[controlPoints.length - 1];
+        for (let i = 0; i <= segments; i++) {
+            const t = i / segments;
+            points.push(new THREE.Vector3(
+                p0.x * (1 - t) + pN.x * t,
+                p0.y * (1 - t) + pN.y * t
+            ));
+        }
+    }
+    return points;
+}
+
 export const generateBezierCurve = generateBezierCurvePolynomial;
