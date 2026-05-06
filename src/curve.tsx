@@ -29,10 +29,19 @@ export function generateBezierCurveCasteljau(
         const t = i / segments;
         const inv_t = 1 - t;
 
+        const p01: THREE.Vector3 = new THREE.Vector3(
+            t * p0.x + inv_t * p1.x,
+            t * p0.y + inv_t * p1.y,
+        );
+
+        const p12: THREE.Vector3 = new THREE.Vector3(
+            t * p1.x + inv_t * p2.x,
+            t * p1.y + inv_t * p2.y,
+        );
+
         points.push(new THREE.Vector3(
-            inv_t * p0.x + t * p2.x,
-            inv_t * p0.y + t * p2.y,
-            inv_t * p0.z + t * p2.z,
+            t * p01.x + inv_t * p12.x,
+            t * p01.y + inv_t * p12.y,
         ));
     }
 
