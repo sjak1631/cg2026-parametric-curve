@@ -177,10 +177,10 @@ export default function App() {
 
     const buildCurvePoints = (pointsVec: THREE.Vector3[], segments: number, degree: number) => {
       if (curveMethodRef.current === "casteljau") {
-        return generateBezierCurveCasteljauN(pointsVec, segments);
+        return generateBezierCurveCasteljauN(pointsVec, degree, segments);
       }
 
-      return generateBezierCurvePolynomialN(pointsVec, segments);
+      return generateBezierCurvePolynomialN(pointsVec, degree, segments);
     };
 
     const addBezierFromControlPoints = (
