@@ -31,18 +31,18 @@ export function generateBezierCurveCasteljau(
         const inv_t = 1 - t;
 
         const p01: THREE.Vector3 = new THREE.Vector3(
-            t * p0.x + inv_t * p1.x,
-            t * p0.y + inv_t * p1.y,
+            inv_t * p0.x + t * p1.x,
+            inv_t * p0.y + t * p1.y,
         );
 
         const p12: THREE.Vector3 = new THREE.Vector3(
-            t * p1.x + inv_t * p2.x,
-            t * p1.y + inv_t * p2.y,
+            inv_t * p1.x + t * p2.x,
+            inv_t * p1.y + t * p2.y,
         );
 
         points.push(new THREE.Vector3(
-            t * p01.x + inv_t * p12.x,
-            t * p01.y + inv_t * p12.y,
+            inv_t * p01.x + t * p12.x,
+            inv_t * p01.y + t * p12.y,
         ));
     }
 
@@ -79,7 +79,31 @@ export function generateBezierCurveCasteljauN(
     degree: number,
     segments: number = 50
 ): THREE.Vector3[] {
-    const points: THREE.Vector3[] = [];
+    let points: THREE.Vector3[] = [];
+
+    if (degree == 2) {
+        points = generateBezierCurveCasteljau(
+            controlPoints[0],
+            controlPoints[1],
+            controlPoints[2],
+            segments
+        );
+    } else {
+        const left = controlPoints.slice(0, degree);
+        const right = controlPoints.slice(1, degree + 1);
+
+        const left_curve = generateBezierCurveCasteljauN(left, degree - 1, segments);
+        const right_curve = generateBezierCurveCasteljauN(right, degree - 1, segments);
+        for (let i = 0; i <= segments; i++) {
+            const t = i / segments;
+            const inv_t = 1 - t;
+            points.push(new THREE.Vector3(
+                inv_t * left_curve[i].x + t * right_curve[i].x,
+                inv_t * left_curve[i].y + t * right_curve[i].y,
+            ))
+        }
+    }
+
 
     return points;
 }
