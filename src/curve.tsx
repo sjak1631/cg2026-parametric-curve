@@ -108,4 +108,36 @@ export function generateBezierCurveCasteljauN(
     return points;
 }
 
+export function generateCatmullRomSplineSegment(
+    p0: THREE.Vector3,
+    p1: THREE.Vector3,
+    p2: THREE.Vector3,
+    p3: THREE.Vector3,
+    t0: number,
+    t1: number,
+    t2: number,
+    t3: number,
+    segments: number = 50
+): THREE.Vector3[] {
+    const points: THREE.Vector3[] = [];
+
+    const start = t1;
+    const end = t2;
+
+    for (let i = 0; i <= segments; i++) {
+        const t = start + (end - start) * (i / segments);
+
+        const A1: THREE.Vector3 = p0.clone().multiplyScalar((t1 - t) / (t1 - t0)).add(p1.clone().multiplyScalar((t - t0) / (t1 - t0)));
+        const A2: THREE.Vector3 = p1.clone().multiplyScalar((t2 - t) / (t2 - t1)).add(p2.clone().multiplyScalar((t - t1) / (t2 - t1)));
+        const A3: THREE.Vector3 = p2.clone().multiplyScalar((t3 - t) / (t3 - t2)).add(p3.clone().multiplyScalar((t - t2) / (t3 - t2)));
+
+        const B1: THREE.Vector3 = A1.clone().multiplyScalar((t2 - t) / (t2 - t0)).add(A2.clone().multiplyScalar((t - t0) / (t2 - t0)));
+        const B2: THREE.Vector3 = A2.clone().multiplyScalar((t3 - t) / (t3 - t1)).add(A3.clone().multiplyScalar((t - t1) / (t3 - t1)));
+
+        points.push(B1.clone().multiplyScalar((t2 - t) / (t2 - t1)).add(B2.clone().multiplyScalar((t - t1) / (t2 - t1))));
+    }
+
+    return points;
+}
+
 export const generateBezierCurve = generateBezierCurvePolynomial;
