@@ -2,6 +2,7 @@ import "./styles.css";
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { generateBezierCurveCasteljau, generateBezierCurvePolynomial, generateBezierCurvePolynomialN, generateBezierCurveCasteljauN } from "./curve";
+import { createThreeRenderer } from "./threeRenderer";
 
 interface ControlPoint {
   position: THREE.Vector3;
@@ -29,19 +30,16 @@ export default function App() {
       return;
     }
 
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf7f8fa);
+    const rendererApi = createThreeRenderer(container);
+    const domElement = rendererApi.domElement;
+    const camera = rendererApi.camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    container.appendChild(renderer.domElement);
-
-    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1000, 1000);
-    camera.position.set(0, 0, 10);
-    camera.lookAt(0, 0, 0);
-
-    const lineObjects: THREE.Line[] = [];
-    const pointObjects: THREE.Mesh[] = [];
+    const addLine = rendererApi.addLine;
+    const addPoint = rendererApi.addPoint;
+    const removeLastPointObject = rendererApi.removeLastPointObject;
+    const removeFirstPointObject = rendererApi.removeFirstPointObject;
+    const clearSceneObjects = rendererApi.clearSceneObjects;
+    const screenToWorld = rendererApi.screenToWorld;
     let controlPoints: ControlPoint[] = [];
     let currentCurveStart: THREE.Vector3 | null = null;
     const closedCurves: ControlPoint[][] = []; // 完成した曲線群
@@ -74,20 +72,7 @@ export default function App() {
       closedRendered: closedCurveRendered.map((r) => ({ points: r.points.map((pt) => ({ x: pt.x, y: pt.y })), color: r.color })),
     });
 
-    const clearSceneObjects = () => {
-      while (lineObjects.length) {
-        const l = lineObjects.pop()!;
-        l.geometry.dispose();
-        (l.material as THREE.Material).dispose();
-        scene.remove(l);
-      }
-      while (pointObjects.length) {
-        const p = pointObjects.pop()!;
-        (p.geometry as THREE.BufferGeometry).dispose();
-        (p.material as THREE.Material).dispose();
-        scene.remove(p);
-      }
-    };
+    // clearSceneObjects is provided by rendererApi
 
     const restoreSnapshot = (snap: Snapshot) => {
       // clear current objects
@@ -130,27 +115,31 @@ export default function App() {
       addBezierFromControlPoints(controlPoints, 0x8f96a3);
     };
 
-    const pushHistory = () => {
-      const snap = createSnapshot();
-      // trim future
-      history.splice(historyIndex + 1);
-      history.push(snap);
-      historyIndex = history.length - 1;
-    };
-
-    const undoHistory = () => {
-      if (historyIndex <= 0) return;
-      historyIndex -= 1;
-      const snap = history[historyIndex];
-      restoreSnapshot(snap);
-    };
-
-    const redoHistory = () => {
-      if (historyIndex >= history.length - 1) return;
-      historyIndex += 1;
-      const snap = history[historyIndex];
-      restoreSnapshot(snap);
-    };
+    // history manager (uses createSnapshot / restoreSnapshot)
+    const { pushHistory, undoHistory, redoHistory } = (function () {
+      const historyLocal: any[] = [];
+      let historyIndexLocal = -1;
+      return {
+        pushHistory: () => {
+          const snap = createSnapshot();
+          historyLocal.splice(historyIndexLocal + 1);
+          historyLocal.push(snap);
+          historyIndexLocal = historyLocal.length - 1;
+        },
+        undoHistory: () => {
+          if (historyIndexLocal <= 0) return;
+          historyIndexLocal -= 1;
+          const snap = historyLocal[historyIndexLocal];
+          restoreSnapshot(snap);
+        },
+        redoHistory: () => {
+          if (historyIndexLocal >= historyLocal.length - 1) return;
+          historyIndexLocal += 1;
+          const snap = historyLocal[historyIndexLocal];
+          restoreSnapshot(snap);
+        },
+      };
+    })();
 
     redrawRef.current = () => {
       restoreSnapshot(createSnapshot());
@@ -164,9 +153,7 @@ export default function App() {
         const hasBlue = controlPoints.some((p) => p.type === "blue");
         if (hasBlue) {
           // 全ての点表示を一旦消し、赤点のみ再描画して controlPoints を更新する
-          while (pointObjects.length) {
-            removeLastPointObject();
-          }
+          (rendererApi as any).removeAllPointObjects();
 
           const redOnly: ControlPoint[] = controlPoints.filter((p) => p.type === "red");
           controlPoints = redOnly.map((p) => ({ position: p.position.clone(), type: "red" }));
@@ -186,14 +173,6 @@ export default function App() {
       degreeRef.current = next;
       setDegree(next);
       redrawRef.current?.();
-    };
-
-    const addLine = (points: THREE.Vector3[], color: number) => {
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      const material = new THREE.LineBasicMaterial({ color });
-      const line = new THREE.Line(geometry, material);
-      scene.add(line);
-      lineObjects.push(line);
     };
 
     const buildCurvePoints = (pointsVec: THREE.Vector3[], segments: number, degree: number) => {
@@ -222,50 +201,6 @@ export default function App() {
           addLine(curvePoints, color);
         }
       }
-    };
-
-    const addPoint = (position: THREE.Vector3, color: THREE.Color) => {
-      const geometry = new THREE.SphereGeometry(3, 24, 24);
-      const material = new THREE.MeshBasicMaterial({ color });
-      const sphere = new THREE.Mesh(geometry, material);
-      sphere.position.copy(position);
-      scene.add(sphere);
-      pointObjects.push(sphere);
-    };
-
-    const removeLastPointObject = () => {
-      const p = pointObjects.pop();
-      if (!p) {
-        return;
-      }
-      (p.geometry as THREE.BufferGeometry).dispose();
-      (p.material as THREE.Material).dispose();
-      scene.remove(p);
-    };
-
-    const removeFirstPointObject = () => {
-      const p = pointObjects.shift();
-      if (!p) {
-        return;
-      }
-      (p.geometry as THREE.BufferGeometry).dispose();
-      (p.material as THREE.Material).dispose();
-      scene.remove(p);
-    };
-
-    // スクリーン座標をワールド座標に変換
-    const screenToWorld = (clientX: number, clientY: number): THREE.Vector3 => {
-      const rect = container.getBoundingClientRect();
-      const x = clientX - rect.left;
-      const y = clientY - rect.top;
-
-      const normalizedX = (x / rect.width) * 2 - 1;
-      const normalizedY = -(y / rect.height) * 2 + 1;
-
-      const vector = new THREE.Vector3(normalizedX, normalizedY, 0);
-      vector.unproject(camera);
-
-      return vector;
     };
 
     // 曲線を確定してリセット
@@ -476,25 +411,14 @@ export default function App() {
 
     // Delete All
     const deleteAll = () => {
-      // remove lines
-      while (lineObjects.length) {
-        const l = lineObjects.pop()!;
-        l.geometry.dispose();
-        (l.material as THREE.Material).dispose();
-        scene.remove(l);
-      }
-      // remove points
-      while (pointObjects.length) {
-        const p = pointObjects.pop()!;
-        (p.geometry as THREE.BufferGeometry).dispose();
-        (p.material as THREE.Material).dispose();
-        scene.remove(p);
-      }
+      // clear renderer objects
+      clearSceneObjects();
       // reset state
       controlPoints = [];
       currentCurveStart = null;
       closedCurves.length = 0;
       closedCurveMeta.length = 0;
+      closedCurveRendered.length = 0;
       pushHistory();
     };
 
@@ -507,20 +431,14 @@ export default function App() {
         const shouldRemoveLine = controlPoints.length > 1;
 
         controlPoints.pop();
-        const lastPoint = pointObjects.pop();
-        if (lastPoint) {
-          (lastPoint.geometry as THREE.BufferGeometry).dispose();
-          (lastPoint.material as THREE.Material).dispose();
-          scene.remove(lastPoint);
-        }
+        // remove last rendered point
+        removeLastPointObject();
 
         // Remove the connecting line only if it was created for this point
         if (shouldRemoveLine) {
-          const lastLine = lineObjects.pop();
-          if (lastLine) {
-            lastLine.geometry.dispose();
-            (lastLine.material as THREE.Material).dispose();
-            scene.remove(lastLine);
+          // remove last rendered line
+          if ((rendererApi as any).getLineCount && (rendererApi as any).getLineCount() > 0) {
+            (rendererApi as any).removeLastLine();
           }
         }
 
@@ -534,11 +452,8 @@ export default function App() {
         const meta = closedCurveMeta.pop()!;
 
         // remove the closing line that was drawn at finish (if any)
-        if (lineObjects.length > 0) {
-          const closingLine = lineObjects.pop()!;
-          closingLine.geometry.dispose();
-          (closingLine.material as THREE.Material).dispose();
-          scene.remove(closingLine);
+        if ((rendererApi as any).getLineCount && (rendererApi as any).getLineCount() > 0) {
+          (rendererApi as any).removeLastLine();
         }
 
         // restore controlPoints to the curve's points (so user returns to blue-point context)
@@ -548,12 +463,12 @@ export default function App() {
       }
     };
 
-    renderer.domElement.addEventListener("mousedown", handleCanvasMouseDown);
-    renderer.domElement.addEventListener("mousemove", handleCanvasMouseMove);
-    renderer.domElement.addEventListener("mouseup", handleCanvasMouseUp);
-    renderer.domElement.addEventListener("contextmenu", handleContextMenu);
+    domElement.addEventListener("mousedown", handleCanvasMouseDown);
+    domElement.addEventListener("mousemove", handleCanvasMouseMove);
+    domElement.addEventListener("mouseup", handleCanvasMouseUp);
+    domElement.addEventListener("contextmenu", handleContextMenu);
     // wheel for zoom (preventDefault to allow smooth zoom)
-    renderer.domElement.addEventListener("wheel", handleWheel as EventListener, { passive: false });
+    domElement.addEventListener("wheel", handleWheel as EventListener, { passive: false });
     finishButtonRef.current?.addEventListener("click", handleFinish);
     // attach handlers for deleteAll/undo/redo buttons if present
     const deleteButton = document.getElementById("delete-all-button");
@@ -566,40 +481,16 @@ export default function App() {
     // push initial snapshot
     pushHistory();
 
-    const resize = () => {
-      const width = Math.max(container.clientWidth, 1);
-      const height = Math.max(container.clientHeight, 1);
-
-      renderer.setSize(width, height);
-
-      camera.left = -width / 2;
-      camera.right = width / 2;
-      camera.top = height / 2;
-      camera.bottom = -height / 2;
-      camera.updateProjectionMatrix();
-    };
-
-    resize();
-
-    const resizeObserver = new ResizeObserver(resize);
-    resizeObserver.observe(container);
-
-    let animationFrameId = 0;
-    const render = () => {
-      animationFrameId = window.requestAnimationFrame(render);
-      renderer.render(scene, camera);
-    };
-    render();
+    // rendererApi manages resize and render loop
 
     return () => {
       redrawRef.current = null;
-      window.cancelAnimationFrame(animationFrameId);
-      resizeObserver.disconnect();
-      renderer.domElement.removeEventListener("mousedown", handleCanvasMouseDown);
-      renderer.domElement.removeEventListener("mousemove", handleCanvasMouseMove);
-      renderer.domElement.removeEventListener("mouseup", handleCanvasMouseUp);
-      renderer.domElement.removeEventListener("contextmenu", handleContextMenu);
-      renderer.domElement.removeEventListener("wheel", handleWheel as EventListener);
+      // rendererApi handles animation and resize internally
+      domElement.removeEventListener("mousedown", handleCanvasMouseDown);
+      domElement.removeEventListener("mousemove", handleCanvasMouseMove);
+      domElement.removeEventListener("mouseup", handleCanvasMouseUp);
+      domElement.removeEventListener("contextmenu", handleContextMenu);
+      domElement.removeEventListener("wheel", handleWheel as EventListener);
       finishButtonRef.current?.removeEventListener("click", handleFinish);
       const deleteButton = document.getElementById("delete-all-button");
       const undoButton = document.getElementById("undo-button");
@@ -607,21 +498,8 @@ export default function App() {
       deleteButton?.removeEventListener("click", deleteAll as EventListener);
       undoButton?.removeEventListener("click", undoHistory as EventListener);
       redoButton?.removeEventListener("click", redoHistory as EventListener);
-
-      for (const line of lineObjects) {
-        line.geometry.dispose();
-        (line.material as THREE.Material).dispose();
-        scene.remove(line);
-      }
-
-      for (const point of pointObjects) {
-        (point.geometry as THREE.BufferGeometry).dispose();
-        (point.material as THREE.Material).dispose();
-        scene.remove(point);
-      }
-
-      renderer.dispose();
-      container.removeChild(renderer.domElement);
+      // dispose renderer and all objects
+      (rendererApi as any).dispose();
     };
   }, []);
 
