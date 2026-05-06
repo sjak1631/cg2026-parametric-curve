@@ -1,19 +1,23 @@
 import "./styles.css";
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { generateBezierCurve } from "./curve";
+import { generateBezierCurveCasteljau, generateBezierCurvePolynomial } from "./curve";
 
 interface ControlPoint {
   position: THREE.Vector3;
   type: "red" | "blue"; // red: 通る点, blue: 通らない点
 }
 
+type CurveMethod = "polynomial" | "casteljau";
+
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const finishButtonRef = useRef<HTMLButtonElement | null>(null);
   const segmentsRef = useRef(64);
   const redrawRef = useRef<(() => void) | null>(null);
+  const curveMethodRef = useRef<CurveMethod>("polynomial");
   const [segments, setSegments] = useState(64);
+  const [curveMethod, setCurveMethod] = useState<CurveMethod>("polynomial");
 
   useEffect(() => {
     const container = containerRef.current;
@@ -147,6 +151,14 @@ export default function App() {
       lineObjects.push(line);
     };
 
+    const buildCurvePoints = (p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, segments: number) => {
+      if (curveMethodRef.current === "casteljau") {
+        return generateBezierCurveCasteljau(p0, p1, p2, segments);
+      }
+
+      return generateBezierCurvePolynomial(p0, p1, p2, segments);
+    };
+
     const addBezierFromControlPoints = (
       points: ControlPoint[],
       color: number,
@@ -157,7 +169,7 @@ export default function App() {
       }
 
       for (let i = 0; i + 2 < points.length; i += 2) {
-        const curvePoints = generateBezierCurve(
+        const curvePoints = buildCurvePoints(
           points[i].position,
           points[i + 1].position,
           points[i + 2].position,
@@ -263,7 +275,7 @@ export default function App() {
           const p0 = controlPoints[controlPoints.length - 2].position;
           const p1 = controlPoints[controlPoints.length - 1].position;
           const p2 = closingRed.position;
-          addLine(generateBezierCurve(p0, p1, p2, segmentsRef.current), 0x8f96a3);
+          addLine(buildCurvePoints(p0, p1, p2, segmentsRef.current), 0x8f96a3);
 
           controlPoints.push(closingRed);
           finishCurve(true);
@@ -288,7 +300,7 @@ export default function App() {
                 const p0 = controlPoints[controlPoints.length - 2].position;
                 const p1 = controlPoints[controlPoints.length - 1].position;
                 const p2 = closingRed.position;
-                addLine(generateBezierCurve(p0, p1, p2, segmentsRef.current), 0x8f96a3);
+                addLine(buildCurvePoints(p0, p1, p2, segmentsRef.current), 0x8f96a3);
               }
 
               controlPoints.push(closingRed);
@@ -308,7 +320,7 @@ export default function App() {
         const p0 = seg[0].position;
         const p1 = seg[1].position;
         const p2 = seg[2].position;
-        addLine(generateBezierCurve(p0, p1, p2, segmentsRef.current), 0x8f96a3);
+        addLine(buildCurvePoints(p0, p1, p2, segmentsRef.current), 0x8f96a3);
 
         // この区間は確定済みとして保存し、履歴復元できるようにする
         closedCurves.push(seg.map((p) => ({ position: p.position.clone(), type: p.type })));
@@ -582,6 +594,22 @@ export default function App() {
             }}
           />
           <span>{segments}</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label htmlFor="curve-method">method</label>
+          <select
+            id="curve-method"
+            value={curveMethod}
+            onChange={(event) => {
+              const next = event.target.value as CurveMethod;
+              setCurveMethod(next);
+              curveMethodRef.current = next;
+              redrawRef.current?.();
+            }}
+          >
+            <option value="polynomial">polynomial</option>
+            <option value="casteljau">de Casteljau</option>
+          </select>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button ref={finishButtonRef} className="finish-button">
