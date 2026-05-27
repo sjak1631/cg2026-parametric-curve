@@ -11,6 +11,7 @@ export type RendererAPI = {
     dispose: () => void;
     camera: THREE.OrthographicCamera;
     setSize: (w: number, h: number) => void;
+    setBackgroundImage?: (url: string | null) => void;
 };
 
 export function createThreeRenderer(container: HTMLDivElement): RendererAPI {
@@ -28,9 +29,49 @@ export function createThreeRenderer(container: HTMLDivElement): RendererAPI {
     const lineObjects: THREE.Line[] = [];
     const pointObjects: THREE.Mesh[] = [];
 
+    // ---- background trace image ----
+    let backgroundMesh: THREE.Mesh | null = null;
+    let backgroundTexture: THREE.Texture | null = null;
+
+    const disposeBackground = () => {
+        if (backgroundMesh) {
+            scene.remove(backgroundMesh);
+            (backgroundMesh.geometry as THREE.BufferGeometry).dispose();
+            (backgroundMesh.material as THREE.Material).dispose();
+            backgroundMesh = null;
+        }
+        if (backgroundTexture) {
+            backgroundTexture.dispose();
+            backgroundTexture = null;
+        }
+    };
+
+    const setTraceVisible = (visible: boolean) => {
+        if (backgroundMesh) backgroundMesh.visible = visible;
+    };
+
+    const setBackgroundImage = (url: string | null) => {
+        disposeBackground();
+        if (!url) return;
+        const loader = new THREE.TextureLoader();
+        loader.load(url, (tex) => {
+            backgroundTexture = tex;
+            const img = tex.image as HTMLImageElement;
+            const w = img?.width ?? 512;
+            const h = img?.height ?? 512;
+            const geom = new THREE.PlaneGeometry(w, h);
+            const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+            const mesh = new THREE.Mesh(geom, mat);
+            // place behind everything
+            mesh.position.set(0, 0, -1);
+            scene.add(mesh);
+            backgroundMesh = mesh;
+        });
+    };
+
     const addLine = (points: THREE.Vector3[], color: number) => {
         const geometry = new THREE.BufferGeometry().setFromPoints(points);
-        const material = new THREE.LineBasicMaterial({ color });
+        const material = new THREE.LineBasicMaterial({ color, linewidth: 2 });
         const line = new THREE.Line(geometry, material);
         scene.add(line);
         lineObjects.push(line);
@@ -47,7 +88,7 @@ export function createThreeRenderer(container: HTMLDivElement): RendererAPI {
     const getLineCount = () => lineObjects.length;
 
     const addPoint = (position: THREE.Vector3, color: THREE.Color) => {
-        const geometry = new THREE.SphereGeometry(3, 24, 24);
+        const geometry = new THREE.SphereGeometry(1, 24, 24);
         const material = new THREE.MeshBasicMaterial({ color });
         const sphere = new THREE.Mesh(geometry, material);
         sphere.position.copy(position);
@@ -120,7 +161,11 @@ export function createThreeRenderer(container: HTMLDivElement): RendererAPI {
         camera.updateProjectionMatrix();
     };
 
-    const resizeObserver = new ResizeObserver(resize);
+    // ResizeObserver のコールバックを次フレームに遅延することで、
+    // "ResizeObserver loop completed with undelivered notifications" 警告を回避する。
+    const resizeObserver = new ResizeObserver(() => {
+        window.requestAnimationFrame(() => resize());
+    });
     resizeObserver.observe(container);
 
     let animationFrameId = 0;
@@ -134,6 +179,7 @@ export function createThreeRenderer(container: HTMLDivElement): RendererAPI {
         window.cancelAnimationFrame(animationFrameId);
         resizeObserver.disconnect();
         clearSceneObjects();
+        disposeBackground();
         renderer.dispose();
         if (renderer.domElement.parentElement === container) {
             container.removeChild(renderer.domElement);
@@ -154,5 +200,7 @@ export function createThreeRenderer(container: HTMLDivElement): RendererAPI {
         setSize: resize,
         removeLastLine,
         getLineCount,
+        setBackgroundImage,
+        setTraceVisible,
     } as any;
 }
