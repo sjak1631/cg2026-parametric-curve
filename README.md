@@ -25,6 +25,29 @@ Open: http://localhost:3000
 npm run build
 ```
 
+## GitHub Pages Deployment
+
+### Manual Deployment
+
+To manually deploy to GitHub Pages:
+
+```bash
+npm run deploy
+```
+
+This command:
+1. Builds the production version (`npm run build`)
+2. Pushes the `build/` directory to the `gh-pages` branch
+3. GitHub automatically publishes it at: https://sjak1631.github.io/cg2026-parametric-curve/
+
+### Automatic Deployment
+
+GitHub Actions automatically deploys to GitHub Pages when you push to the `main` branch. The workflow is defined in `.github/workflows/deploy.yml`.
+
+**Required Setup:**
+- Ensure GitHub Pages is enabled in repository settings (Settings → Pages)
+- Select "Deploy from a branch" and choose the `gh-pages` branch as the source
+
 ## Troubleshooting
 
 - If `npm: command not found` appears, make sure Node.js (npm) is loaded in your shell.

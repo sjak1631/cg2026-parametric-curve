@@ -2,6 +2,7 @@
   "name": "react-typescript",
   "version": "1.0.0",
   "description": "React and TypeScript example starter project",
+  "homepage": "https://sjak1631.github.io/cg2026-parametric-curve/",
   "keywords": [
     "typescript",
     "react",
@@ -21,13 +22,16 @@
     "@types/three": "^0.184.0",
     "ajv": "^8.20.0",
     "ajv-keywords": "^5.1.0",
+    "gh-pages": "^6.1.1",
     "typescript": "^5.9.3"
   },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test --env=jsdom",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d build"
   },
   "browserslist": [
     ">0.2%",
