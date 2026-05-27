@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { bernsteinBasis } from "./util";
+import { ParametrizationType, createClampedKnotVector } from "./parameterization";
 
 export function generateBezierCurvePolynomial(
     p0: THREE.Vector3,
@@ -79,34 +80,33 @@ export function generateBezierCurveCasteljauN(
     degree: number,
     segments: number = 50
 ): THREE.Vector3[] {
-    let points: THREE.Vector3[] = [];
+    const points: THREE.Vector3[] = [];
 
-    if (degree == 2) {
-        points = generateBezierCurveCasteljau(
-            controlPoints[0],
-            controlPoints[1],
-            controlPoints[2],
-            segments
-        );
-    } else {
-        const left = controlPoints.slice(0, degree);
-        const right = controlPoints.slice(1, degree + 1);
+    const bx: number[] = new Array(degree + 1);
+    const by: number[] = new Array(degree + 1);
 
-        const left_curve = generateBezierCurveCasteljauN(left, degree - 1, segments);
-        const right_curve = generateBezierCurveCasteljauN(right, degree - 1, segments);
-        for (let i = 0; i <= segments; i++) {
-            const t = i / segments;
-            const inv_t = 1 - t;
-            points.push(new THREE.Vector3(
-                inv_t * left_curve[i].x + t * right_curve[i].x,
-                inv_t * left_curve[i].y + t * right_curve[i].y,
-            ))
+    for (let s = 0; s <= segments; s++) {
+        const t = s / segments;
+        const inv_t = 1 - t;
+
+        for (let i = 0; i <= degree; i++) {
+            bx[i] = controlPoints[i].x;
+            by[i] = controlPoints[i].y;
         }
-    }
 
+        for (let r = 1; r <= degree; r++) {
+            for (let i = 0; i <= degree - r; i++) {
+                bx[i] = inv_t * bx[i] + t * bx[i + 1];
+                by[i] = inv_t * by[i] + t * by[i + 1];
+            }
+        }
+
+        points.push(new THREE.Vector3(bx[0], by[0]));
+    }
 
     return points;
 }
+
 
 export function generateCatmullRomSplineSegment(
     p0: THREE.Vector3,
@@ -140,4 +140,157 @@ export function generateCatmullRomSplineSegment(
     return points;
 }
 
-export const generateBezierCurve = generateBezierCurvePolynomial;
+export function generateNURBSCurve(
+    controlPoints: THREE.Vector3[],
+    weights?: number[],
+    segments: number = 32,
+    degree: number = 3,
+    knots?: number[],
+    parameterization: ParametrizationType = "uniform"
+): THREE.Vector3[] {
+    if (controlPoints.length < 2) return [];
+
+    const n = controlPoints.length - 1;
+    const p = Math.min(degree, n);
+
+    const ws = weights ?? controlPoints.map(() => 1.0);
+
+    if (ws.length !== controlPoints.length) {
+        throw new Error("weights.length must match controlPoints.length");
+    }
+
+    const U = knots ?? createClampedKnotVector(controlPoints.length, p, controlPoints, parameterization);
+
+    if (U.length !== controlPoints.length + p + 1) {
+        throw new Error(
+            `Invalid knot vector length. Expected ${controlPoints.length + p + 1}, got ${U.length}`
+        );
+    }
+
+    const points: THREE.Vector3[] = [];
+
+    const uStart = U[p];
+    const uEnd = U[n + 1];
+
+    const spanCount = Math.max(1, n - p + 1);
+    const totalSegments = Math.max(1, Math.round(segments * spanCount));
+
+    for (let s = 0; s <= totalSegments; s++) {
+        const t = s / totalSegments;
+        const u = uStart + (uEnd - uStart) * t;
+
+        points.push(evaluateNURBSPoint(u, controlPoints, ws, U, p));
+    }
+
+    return points;
+}
+
+function evaluateNURBSPoint(
+    u: number,
+    controlPoints: THREE.Vector3[],
+    weights: number[],
+    knots: number[],
+    degree: number
+): THREE.Vector3 {
+    const n = controlPoints.length - 1;
+
+    if (Math.abs(u - knots[n + 1]) < 1e-12) {
+        return controlPoints[n].clone();
+    }
+
+    let numerator = new THREE.Vector3(0, 0, 0);
+    let denominator = 0;
+
+    for (let i = 0; i <= n; i++) {
+        const N = bsplineBasis(i, degree, u, knots);
+        const wN = weights[i] * N;
+
+        numerator.add(controlPoints[i].clone().multiplyScalar(wN));
+        denominator += wN;
+    }
+
+    if (Math.abs(denominator) < 1e-12) {
+        return new THREE.Vector3(0, 0, 0);
+    }
+
+    return numerator.divideScalar(denominator);
+}
+
+function bsplineBasis(
+    i: number,
+    degree: number,
+    u: number,
+    knots: number[]
+): number {
+    if (degree === 0) {
+        return knots[i] <= u && u < knots[i + 1] ? 1.0 : 0.0;
+    }
+
+    let left = 0.0;
+    const leftDenom = knots[i + degree] - knots[i];
+
+    if (leftDenom !== 0) {
+        left =
+            ((u - knots[i]) / leftDenom) *
+            bsplineBasis(i, degree - 1, u, knots);
+    }
+
+    let right = 0.0;
+    const rightDenom = knots[i + degree + 1] - knots[i + 1];
+
+    if (rightDenom !== 0) {
+        right =
+            ((knots[i + degree + 1] - u) / rightDenom) *
+            bsplineBasis(i + 1, degree - 1, u, knots);
+    }
+
+    return left + right;
+}
+
+export function generateBezierCurveMonomialN(
+    controlPoints: THREE.Vector3[],
+    degree: number,
+    segments: number = 50
+): THREE.Vector3[] {
+
+    const C: number[][] = [];
+    for (let n = 0; n <= degree; n++) {
+        C.push([]);
+        for (let k = 0; k <= n; k++) {
+            if (k === 0 || k === n) {
+                C[n].push(1);
+            } else {
+                C[n].push(C[n - 1][k - 1] + C[n - 1][k]);
+            }
+        }
+    }
+
+    const ax: number[] = new Array(degree + 1).fill(0);
+    const ay: number[] = new Array(degree + 1).fill(0);
+    for (let i = 0; i <= degree; i++) {
+        let sx = 0;
+        let sy = 0;
+        for (let j = 0; j <= i; j++) {
+            const sign = ((i - j) & 1) ? -1 : 1;
+            const coef = sign * C[i][j];
+            sx += coef * controlPoints[j].x;
+            sy += coef * controlPoints[j].y;
+        }
+        const outer = C[degree][i];
+        ax[i] = outer * sx;
+        ay[i] = outer * sy;
+    }
+
+    const points: THREE.Vector3[] = [];
+    for (let k = 0; k <= segments; k++) {
+        const t = k / segments;
+        let x = ax[degree];
+        let y = ay[degree];
+        for (let i = degree - 1; i >= 0; i--) {
+            x = x * t + ax[i];
+            y = y * t + ay[i];
+        }
+        points.push(new THREE.Vector3(x, y));
+    }
+    return points;
+}
